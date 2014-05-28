@@ -1,0 +1,1 @@
+SUBDIRS = svm xa demo
