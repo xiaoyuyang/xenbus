@@ -13,6 +13,7 @@
 #include<asm/xen/hypercall.h>
 #include<xen/xenbus.h>
 #include<xen/xen.h>
+#include<xen/events.h>
 #include<xen/grant_table.h>
 #include"xa.h"
 
@@ -98,11 +99,6 @@ static int xa_map_ring(void)
 	int domid;
 	struct gnttab_map_grant_ref op;
 	
-	ret = xenbus_exists(XBT_NIL, "/vrv/svm/grant_table", "com");
-	if(0 == ret){
-		printk(KERN_ALERT "[xa]: do not have the right of xenstore!\n");
-		return -1;
-	}
 	
 	//get the domain id of svm
 	ret = xenbus_scanf(XBT_NIL, "/vrv", "svm", "%d", &domid);
@@ -166,6 +162,43 @@ static int xa_domain_id(void)
 
 }
 
+irqreturn_t evh_handler(int irq, void *dev_id)
+{
+	xa_map_ring();
+	xa_watch();
+}
+
+int xa_set_evtchn(void)
+{
+	int ret, remote_domid;
+	struct evtchn_alloc_unbound alloc_unbound;
+
+	//read svm domid
+	ret = xenbus_scanf(XBT_NIL, "/vrv", "svm", "%d", &remote_domid);
+	//if(ret < 1)
+
+	//alloc evtchn and call hyprecall
+	alloc_unbound.dom = DOMID_SELF;
+	alloc_unbound.remote_dom = remote_domid;
+	ret = HYPERVISOR_event_channel_op(EVTCHNOP_alloc_unbound, &alloc_unbound);
+	if(0 != ret){
+		printk(KERN_ALERT "alloc unbound evtchn failed.\n");
+		goto fail;
+	}
+	printk(KERN_ALERT "alloc unbound evtchn %d.\n", alloc_unbound.port);
+
+	//bind evtchn to irqhandler
+	ret = bind_evtchn_to_irqhandler(alloc_unbound.port, evh_handler, IRQF_SAMPLE_RANDOM, "/vrv/svm", NULL);
+	if(ret < 0){
+		printk(KERN_ALERT "bind evtchn to irqhandler failed.\n");
+		goto fail;
+	}
+	return alloc_unbound.port;
+
+fail:
+	return -1;
+}
+
 //xa_ioctl
 static int xa_ioctl(struct inode *inodp, struct file *filp, unsigned int cmd, unsigned long arg)
 {
@@ -174,6 +207,9 @@ static int xa_ioctl(struct inode *inodp, struct file *filp, unsigned int cmd, un
 		case XA_DOMAIN_NUMBER:
 			r = xa_domain_id();
 			break; 
+		case XA_SET_EVTCHN:
+			r = xa_set_evtchn();
+			break;
 		case XA_MAP_RING:
 			r = xa_map_ring();
 			break;
@@ -199,11 +235,10 @@ int xa_unmap_ring(void)
 	if (op.status == GNTST_okay)
 		xen_free_vm_area(area);
 	else
-		printk(KERN_ALERT, "can not unmap the page.\n");
+		printk(KERN_ALERT "can not unmap the page.\n");
 	
 	return op.status;
 }
-
 
 static struct file_operations xa_ops = {
 	.owner = THIS_MODULE,
@@ -218,7 +253,14 @@ struct miscdevice xa_dev = {
 static int __init xa_init(void)
 {
 	int ret;
-	
+
+	//check the right to access xenstore
+	ret = xenbus_exists(XBT_NIL, "/vrv/svm/grant_table", "com");
+	if(0 == ret){
+		printk(KERN_ALERT "[xa]: do not have the right of xenstore!\n");
+		return -1;
+	}
+
 	ret = misc_register(&xa_dev);
 	if(ret != 0){
 		printk(KERN_ALERT "[xa]: misc register failed.\n");

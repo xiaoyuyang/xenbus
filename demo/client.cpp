@@ -17,11 +17,13 @@ int fd;
 
 int client_init()
 {
-	int domid;
+	int domid, port;
 	fd = open("/dev/xa", O_RDWR);
 	domid = ioctl(fd, XA_DOMAIN_NUMBER, NULL);
 	cout << "domid is:" << domid << endl;
-	return domid;
+	port = ioctl(fd, XA_SET_EVTCHN, NULL);
+	cout << "port is:" << port << endl;
+	return 0;
 }
 
 int map_ring()
@@ -52,10 +54,12 @@ int main(int argc, char * argv[])
 	
 	domid = client_init();
 
+	
 	if(wait_for() == -1){
 		cerr << "wait_for failed.\n";
 		return -1;	
 	}
+	
 	
 	ret = map_ring();
 	if(ret == -1){

@@ -15,10 +15,13 @@ using namespace std;
 
 int fd;
 
-int modify_grant_table(int domid)
+int modify_grant_table(int domid, int port)
 {
 	int ret;
-	ret = ioctl(fd, SVM_GRANT_RING, domid);
+	int arg[2];
+	arg[0] = domid;
+	arg[1] = port;
+	ret = ioctl(fd, SVM_GRANT_RING, arg);
 	return ret;
 }
 
@@ -62,24 +65,19 @@ int server_init(void)
 
 int get_domids(void)
 {
-	int domid_one, domid_two, ret;
+	int domid, port, ret, i;
 	
-	//register dom one
-	cout << "type domid one:" ;
-	cin >> domid_one;
-	ret = modify_grant_table(domid_one);
-	if(-1 == ret){
-		cerr << "grant table failed with " << domid_one << endl;
+	for(i = 0; i < 2; i++){
+		cout << "type dmoid:" ;
+		cin >> domid;
+		cout << "type port:" ;
+		cin >> port;
+		ret = modify_grant_table(domid, port);
+		if(-1 == ret){
+			cerr << "grant table failed with " << domid << endl;
+		}
+		cout << "dom:" << domid << " granted." << endl;
 	}
-	cout << "dom:" << domid_one << " granted." << endl;
-
-	cout << "type domid two:" ;
-	cin >> domid_two;
-	ret = modify_grant_table(domid_two);
-	if(-1 == ret){
-		cerr << "grant table failed with " << domid_two << endl;
-	}
-	cout << "dom:" << domid_two << " granted." << endl;
 	
 	return 0;
 }
