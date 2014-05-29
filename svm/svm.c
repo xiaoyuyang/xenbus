@@ -29,29 +29,36 @@ static int svm_alloc_page(void)
 	vaddr = (void *)get_zeroed_page(GFP_NOIO | __GFP_HIGH);
 	if(NULL == vaddr){
 		printk(KERN_ALERT "[svm]: alloc page failed!\n");
-	}
-
-	ret = xenbus_exists(XBT_NIL, "/vrv/svm", "grant_table");
-	if(0 == ret){
-		printk(KERN_ALERT "[svm]: can not read /vrv/svm/grant_table.\n");
 		return -1;
 	}
+
+	printk(KERN_ALERT "[svm]: page alloced!\n");
 	return 0;
 }
 
 static int svm_get_domid(void)
 {
 	int ret;
+	
+	//check if svm have the right to access xenstore
+	ret  = xenbus_exists(XBT_NIL, "/vrv/svm/grant_table", "com");
+	if(0 == ret){
+		printk(KERN_ALERT "[svm]: do not have the right of xenstore!\n");
+		return -1;
+	}
+
 	xenbus_scanf(XBT_NIL, "domid", "", "%d", &ret);
 	xenbus_printf(XBT_NIL, "/vrv", "svm", "%d", ret);
+	printk(KERN_ALERT "[svm]: domid is %d", ret);
 	return ret;
 }
 
 static int svm_grant_ring(int arg)
 {
-	int ret;
+	int ret, gnt_ref;
 	struct xenbus_device dev;
 
+	printk(KERN_ALERT "[svm]: arg is:%d\n", arg);
 	dev.otherend_id = arg;
 
 	if(NULL == vaddr){
@@ -59,20 +66,19 @@ static int svm_grant_ring(int arg)
 		return -1;
 	}
 
-	ret = xenbus_grant_ring(&dev, virt_to_mfn(vaddr));
-	if(ret < 0)
-		goto grant_ring_failed;
+	gnt_ref = xenbus_grant_ring(&dev, virt_to_mfn(vaddr));
+	if(gnt_ref < 0){
+		printk(KERN_ALERT "[svm]: grant ring failed!\n");
+		return -1;
+	}
 	
-	xenbus_printf(XBT_NIL, "/vrv/svm", "grant_table", "%lu", virt_to_mfn(vaddr));
+	xenbus_printf(XBT_NIL, "/vrv/svm/grant_table", "com", "pos:0 len:0");
+	xenbus_printf(XBT_NIL, "/vrv/svm", "grant_table", "%d", gnt_ref);
+
+	printk(KERN_ALERT "[svm]: grant table to %d, gnt_ref is:%d.\n", dev.otherend_id, gnt_ref);
 
 	return 0;
-
-grant_ring_failed:
-	free_page((unsigned long)vaddr);
-
-	return -1;
 }
-
 
 static int svm_ioctl(struct inode *inodp, struct file *filp, unsigned int cmd, unsigned long arg)
 {
@@ -83,6 +89,7 @@ static int svm_ioctl(struct inode *inodp, struct file *filp, unsigned int cmd, u
 			break;
 		case SVM_ALLOC_PAGE:
 			r = svm_alloc_page();
+			break;
 		case SVM_GRANT_RING:
 			r = svm_grant_ring(arg);
 			break;
@@ -94,12 +101,10 @@ static int svm_ioctl(struct inode *inodp, struct file *filp, unsigned int cmd, u
 	return r;
 }
 
-
 ssize_t svm_write(struct file *filp, const char __user *src, size_t len, loff_t *offp)
 {
 	ssize_t ret;
 	static unsigned int pos = 0;
-
 
 	if(NULL == vaddr){
 		printk(KERN_ALERT "[svm]: vaddr is NULL, can not write!");
@@ -137,12 +142,6 @@ static int __init svm_init(void)
 {
 	int ret;
 
-	ret = xenbus_exists(XBT_NIL, "/vrv/svm/grant_table", "com");
-	if(0 == ret){
-		printk(KERN_ALERT "[svm]: can not read /vrv/svm/grant_table/com.\n");
-		return -1;
-	}
-
 	ret = misc_register(&svm_dev);
 	if(ret != 0){
 		printk(KERN_ALERT "[svm]: misc register failed.\n");
@@ -155,6 +154,7 @@ static int __init svm_init(void)
 
 static void __exit svm_exit(void)
 {
+	free_page((unsigned long)vaddr);
 	misc_deregister(&svm_dev);
 	printk(KERN_ALERT "[svm]: module removed.\n");
 	

@@ -17,7 +17,8 @@
 #include"xa.h"
 
 MODULE_LICENSE("Dual BSD/GPL");
-void *vaddr;
+
+struct vm_struct *area;
 
 //watch com and read command
 int command_read(unsigned pos, unsigned len)
@@ -28,8 +29,8 @@ int command_read(unsigned pos, unsigned len)
 		return -1;
 	}
 
-	memcpy(str, vaddr + pos, len);
-	str[len] = '\n';
+	memcpy(str, area->addr + pos, len);
+	str[len] = '\0';
 	printk(KERN_ALERT "[xa]: command is %s.\n", str);
 	vfree(str);
 	
@@ -84,7 +85,6 @@ static int xa_watch(void)
 
 }
 
-
 /* xa_map_ring
  *
  * read domid and gnt_ref
@@ -94,14 +94,13 @@ static int xa_watch(void)
 static int xa_map_ring(void)
 {
 	int ret;
-	int gnt_ref;
+	grant_ref_t gnt_ref;
 	int domid;
 	struct gnttab_map_grant_ref op;
-	struct vm_struct *area;
 	
 	ret = xenbus_exists(XBT_NIL, "/vrv/svm/grant_table", "com");
 	if(0 == ret){
-		printk(KERN_ALERT "[xa]: can not read /vrv/svm/grant_table!\n");
+		printk(KERN_ALERT "[xa]: do not have the right of xenstore!\n");
 		return -1;
 	}
 	
@@ -113,14 +112,14 @@ static int xa_map_ring(void)
 	}
 	
 	//get the grant table reference
-	ret = xenbus_scanf(XBT_NIL, "/vrv/svm", "grant_table", "%d", &gnt_ref);
+	ret = xenbus_scanf(XBT_NIL, "/vrv/svm", "grant_table", "%u", &gnt_ref);
 	if(ret < 0){
 		printk(KERN_ALERT "[xa]:can not get the value of gnt_ref from /vrv/svm/grant_table.");
 		return -1;
 	}
-
+	printk(KERN_ALERT "[xa]: svm domid is:%d, gnt_ref is:%u.\n", domid, gnt_ref);
+	
 	area = xen_alloc_vm_area(PAGE_SIZE);
-	vaddr = area->addr;
 	
 	//map
 	op.host_addr = (unsigned long)area->addr;
@@ -135,7 +134,13 @@ static int xa_map_ring(void)
 	if (op.status != GNTST_okay) {
 		printk(KERN_ALERT "[xa]: map grant table failed! status is %d", op.status);
 	}	
-	
+	printk(KERN_ALERT "[xa]: map grant op status is %d", op.status);
+
+	/* op.handle is needed in the unmap op
+	 * Stuff the handle in an unused field
+	 */
+	area->phys_addr = (unsigned long)op.handle;
+
 	return op.status;
 }
 
@@ -183,14 +188,27 @@ static int xa_ioctl(struct inode *inodp, struct file *filp, unsigned int cmd, un
 	return r;
 }
 
+int xa_unmap_ring(void)
+{
+	struct gnttab_unmap_grant_ref op = {
+		.host_addr = (unsigned long)area->addr,
+		.handle = (grant_handle_t)area->phys_addr,
+	};
+	
+	HYPERVISOR_grant_table_op(GNTTABOP_unmap_grant_ref, &op, 1);
+	if (op.status == GNTST_okay)
+		xen_free_vm_area(area);
+	else
+		printk(KERN_ALERT, "can not unmap the page.\n");
+	
+	return op.status;
+}
 
 
-//module init and exit
 static struct file_operations xa_ops = {
 	.owner = THIS_MODULE,
 	.ioctl = xa_ioctl,
 };
-
 struct miscdevice xa_dev = {
 	.minor = MISC_DYNAMIC_MINOR,
 	.fops  = &xa_ops,
@@ -215,8 +233,8 @@ static int __init xa_init(void)
 
 static void __exit xa_exit(void)
 {
+	xa_unmap_ring();
 	unregister_xenstore_notifier(&xenstore_notifier);
-
 	misc_deregister(&xa_dev);
 	printk(KERN_ALERT "[xa]: module removed.\n");
 	
